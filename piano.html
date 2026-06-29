@@ -412,7 +412,7 @@ async function connectMidi() {
     midiAccess = await navigator.requestMIDIAccess();
     scanMidiInputs();
     midiAccess.onstatechange = scanMidiInputs;
-    setStatus('✅ MIDI initialisé — branche ton Roland en USB');
+    setStatus('✅ MIDI initialisé — connecte ton Roland via MIDIberry (Bluetooth) ou USB');
   } catch(err) {
     setStatus('❌ Accès MIDI refusé : ' + err.message);
   }
@@ -431,7 +431,7 @@ function scanMidiInputs() {
   if (!rolandInput) {
     devEl.textContent = '🎹 Aucun clavier détecté';
     devEl.className = '';
-    setStatus('Brancher le Roland en USB puis cliquer Connecter');
+    setStatus('Aucun clavier détecté — lance MIDIberry puis reclique sur Connecter Roland');
   }
 }
 
