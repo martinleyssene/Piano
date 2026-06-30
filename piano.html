@@ -379,16 +379,42 @@ window.addEventListener('load', () => {
     if (midi != null) onNoteOff(midi);
   });
 
-  // Souris
+    // Souris — avec support du glisser
+  let mouseDown = false;
+  let mouseCurrentMidi = null;
+
   pianoCanvas.addEventListener('mousedown', e => {
+    mouseDown = true;
     const rect = pianoCanvas.getBoundingClientRect();
     const note = findNoteAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (note) onNoteOn(note.midi, 80, 'click');
+    if (note) {
+      mouseCurrentMidi = note.midi;
+      onNoteOn(note.midi, 80, 'click');
+    }
   });
-  pianoCanvas.addEventListener('mouseup', e => {
+
+  pianoCanvas.addEventListener('mousemove', e => {
+    if (!mouseDown) return;
     const rect = pianoCanvas.getBoundingClientRect();
     const note = findNoteAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (note) onNoteOff(note.midi);
+    if (note && note.midi !== mouseCurrentMidi) {
+      if (mouseCurrentMidi != null) onNoteOff(mouseCurrentMidi);
+      mouseCurrentMidi = note.midi;
+      onNoteOn(note.midi, 80, 'click');
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (mouseCurrentMidi != null) onNoteOff(mouseCurrentMidi);
+    mouseCurrentMidi = null;
+    mouseDown = false;
+  });
+
+  pianoCanvas.addEventListener('mouseleave', () => {
+    if (!mouseDown && mouseCurrentMidi != null) {
+      onNoteOff(mouseCurrentMidi);
+      mouseCurrentMidi = null;
+    }
   });
 
   // Tactile — support multi-touch + glisser
