@@ -464,16 +464,42 @@ window.addEventListener('load', () => {
     if (midi != null) onNoteOff(midi);
   });
 
-  // Souris
+  // Souris — avec support du glisser et fix relâchement hors canvas
+  let mouseDown = false;
+  let mouseCurrentMidi = null;
+
   pianoCanvas.addEventListener('mousedown', e => {
+    mouseDown = true;
     const rect = pianoCanvas.getBoundingClientRect();
     const note = findNoteAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (note) onNoteOn(note.midi, 80, 'click');
+    if (note) {
+      mouseCurrentMidi = note.midi;
+      onNoteOn(note.midi, 80, 'click');
+    }
   });
-  pianoCanvas.addEventListener('mouseup', e => {
+
+  pianoCanvas.addEventListener('mousemove', e => {
+    if (!mouseDown) return;
     const rect = pianoCanvas.getBoundingClientRect();
     const note = findNoteAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (note) onNoteOff(note.midi);
+    if (note && note.midi !== mouseCurrentMidi) {
+      if (mouseCurrentMidi != null) onNoteOff(mouseCurrentMidi);
+      mouseCurrentMidi = note.midi;
+      onNoteOn(note.midi, 80, 'click');
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (mouseCurrentMidi != null) onNoteOff(mouseCurrentMidi);
+    mouseCurrentMidi = null;
+    mouseDown = false;
+  });
+
+  pianoCanvas.addEventListener('mouseleave', () => {
+    if (!mouseDown && mouseCurrentMidi != null) {
+      onNoteOff(mouseCurrentMidi);
+      mouseCurrentMidi = null;
+    }
   });
 
   // Tactile — support multi-touch + glisser
@@ -622,17 +648,11 @@ function onNoteOff(midi) {
 
 // ── NOTES EN DIRECT (s'étirent tant que la touche est maintenue) ──
 function spawnLiveNote(midi, source) {
-  // Évite les doublons si la note est déjà en cours (note répétée rapidement)
   if (liveNoteBlocks[midi]) releaseLiveNote(midi);
-
   const note = noteLayout.find(n => n.midi === midi);
   if (!note) return;
-
   const fallH = fallZone.offsetHeight;
-  const hand  = source === 'roland' || source === 'keyboard' || source === 'click' || source === 'touch'
-    ? (midi < 60 ? 'left' : 'right')
-    : 'right';
-
+  const hand = (midi < 60 ? 'left' : 'right');
   const el = document.createElement('div');
   el.className = 'note-block ' + hand + ' live-note';
   el.style.left   = note.x + 2 + 'px';
@@ -641,15 +661,12 @@ function spawnLiveNote(midi, source) {
   el.style.top    = (fallH - 4) + 'px';
   el.textContent  = NOTE_NAMES[note.n];
   fallZone.appendChild(el);
-
-  liveNoteBlocks[midi] = { el, startTime: performance.now(), midi };
+  liveNoteBlocks[midi] = { el, midi, top: fallH - 4, height: 4, released: false };
 }
 
 function releaseLiveNote(midi) {
   const live = liveNoteBlocks[midi];
   if (!live) return;
-  delete liveNoteBlocks[midi];
-  // La note continue de monter et disparaît une fois sortie de l'écran (gérée dans loop())
   live.released = true;
 }
 
@@ -989,22 +1006,21 @@ function loop(ts) {
     if (scheduledEvents.length === 0 && noteBlocks.length === 0) { playing = false; setStatus('✅ Terminé'); }
   }
 
-  // Notes en direct : s'étirent vers le haut tant que maintenues,
-  // puis montent normalement une fois relâchées (comme Synthesia)
+  // Notes live : bas collé à la ligne d'impact, s'étirent vers le haut tant que maintenues,
+  // puis le bloc entier monte et disparaît une fois relâché
   for (const midi in liveNoteBlocks) {
     const live = liveNoteBlocks[midi];
-    const bottom = parseFloat(live.el.style.top) + parseFloat(live.el.style.height);
-
     if (!live.released) {
-      // Touche maintenue : la note grandit vers le haut, le bas reste collé à la ligne d'impact
-      const newHeight = parseFloat(live.el.style.height) + speed * dt;
-      live.el.style.height = newHeight + 'px';
-      live.el.style.top = (fallH - newHeight) + 'px';
+      // Touche maintenue : grandit vers le haut, bas reste sur la ligne d'impact
+      live.height += speed * dt;
+      live.top = fallH - live.height;
+      live.el.style.height = live.height + 'px';
+      live.el.style.top    = live.top + 'px';
     } else {
-      // Touche relâchée : le bloc entier monte, comme un bloc normal
-      const newTop = parseFloat(live.el.style.top) - speed * dt;
-      live.el.style.top = newTop + 'px';
-      if (newTop + parseFloat(live.el.style.height) < 0) {
+      // Touche relâchée : le bloc entier monte et sort par le haut
+      live.top -= speed * dt;
+      live.el.style.top = live.top + 'px';
+      if (live.top + live.height < 0) {
         live.el.remove();
         delete liveNoteBlocks[midi];
       }
