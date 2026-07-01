@@ -240,6 +240,77 @@
   #rec-timer  { font-size: 36px; font-weight: 700; color: #ff4444; margin-bottom: 18px; }
   #rec-notes-count { font-size: 12px; color: #44ddff; margin-bottom: 18px; }
   .modal-btns { display: flex; gap: 10px; justify-content: center; }
+
+  /* ── BIBLIOTHEQUE ── */
+  #library-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000000cc;
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #library-modal.visible { display: flex; }
+  #library-box {
+    background: #1a1a2a;
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 20px 24px;
+    width: 90%;
+    max-width: 480px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+  }
+  #library-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  #library-header h2 { font-size: 16px; color: #fff; }
+  #library-list {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .lib-item {
+    background: #14141e;
+    border: 1px solid #2a2a3a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .lib-item-name {
+    font-size: 13px;
+    color: #fff;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed #444;
+    padding: 2px 0;
+    width: 100%;
+  }
+  .lib-item-meta {
+    font-size: 11px;
+    color: #777;
+  }
+  .lib-item-btns {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+  .lib-item-btns .btn { font-size: 11px; padding: 4px 8px; }
+  #library-empty {
+    text-align: center;
+    color: #666;
+    font-size: 13px;
+    padding: 30px 0;
+  }
 </style>
 </head>
 <body>
@@ -264,6 +335,7 @@
 
   <button class="btn rec" id="btn-rec">⏺ Enregistrer</button>
   <button class="btn green" id="btn-playback" style="display:none">▶ Réécouter</button>
+  <button class="btn" id="btn-library">📁 Mes enregistrements</button>
 
   <div class="sep"></div>
 
@@ -297,6 +369,17 @@
   <canvas id="piano-canvas"></canvas>
 </div>
 
+<!-- MODAL BIBLIOTHEQUE -->
+<div id="library-modal">
+  <div id="library-box">
+    <div id="library-header">
+      <h2>📁 Mes enregistrements</h2>
+      <button class="btn" id="btn-close-library">✕ Fermer</button>
+    </div>
+    <div id="library-list"></div>
+  </div>
+</div>
+
 <div id="rec-modal">
   <div id="rec-box">
     <h2>⏺ Enregistrement en cours</h2>
@@ -309,6 +392,7 @@
     </div>
   </div>
 </div>
+
 
 <script>
 const START_OCTAVE = 2;
@@ -327,6 +411,7 @@ let pianoCanvas, pianoCtx, gridCanvas, gridCtx, fallZone;
 let whiteW, blackW, blackH;
 let totalWhites, noteLayout = [];
 let activeKeys     = new Set();
+let liveNoteBlocks = {}; // midi → { el, startTime }
 let noteBlocks     = [];
 let lastTime       = null;
 let playing        = false;
@@ -379,42 +464,16 @@ window.addEventListener('load', () => {
     if (midi != null) onNoteOff(midi);
   });
 
-    // Souris — avec support du glisser
-  let mouseDown = false;
-  let mouseCurrentMidi = null;
-
+  // Souris
   pianoCanvas.addEventListener('mousedown', e => {
-    mouseDown = true;
     const rect = pianoCanvas.getBoundingClientRect();
     const note = findNoteAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (note) {
-      mouseCurrentMidi = note.midi;
-      onNoteOn(note.midi, 80, 'click');
-    }
+    if (note) onNoteOn(note.midi, 80, 'click');
   });
-
-  pianoCanvas.addEventListener('mousemove', e => {
-    if (!mouseDown) return;
+  pianoCanvas.addEventListener('mouseup', e => {
     const rect = pianoCanvas.getBoundingClientRect();
     const note = findNoteAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (note && note.midi !== mouseCurrentMidi) {
-      if (mouseCurrentMidi != null) onNoteOff(mouseCurrentMidi);
-      mouseCurrentMidi = note.midi;
-      onNoteOn(note.midi, 80, 'click');
-    }
-  });
-
-  window.addEventListener('mouseup', () => {
-    if (mouseCurrentMidi != null) onNoteOff(mouseCurrentMidi);
-    mouseCurrentMidi = null;
-    mouseDown = false;
-  });
-
-  pianoCanvas.addEventListener('mouseleave', () => {
-    if (!mouseDown && mouseCurrentMidi != null) {
-      onNoteOff(mouseCurrentMidi);
-      mouseCurrentMidi = null;
-    }
+    if (note) onNoteOff(note.midi);
   });
 
   // Tactile — support multi-touch + glisser
@@ -471,6 +530,8 @@ window.addEventListener('load', () => {
   document.getElementById('btn-stop-rec').addEventListener('click', stopRecording);
   document.getElementById('btn-cancel-rec').addEventListener('click', cancelRecording);
   document.getElementById('btn-playback').addEventListener('click', playbackRecording);
+  document.getElementById('btn-library').addEventListener('click', openLibrary);
+  document.getElementById('btn-close-library').addEventListener('click', closeLibrary);
   document.getElementById('btn-score').addEventListener('click', toggleScore);
   document.getElementById('midi-file').addEventListener('change', loadMidi);
 
@@ -540,6 +601,7 @@ function onNoteOn(midi, velocity = 80, source = 'unknown') {
   activeKeys.add(midi);
   if (soundEnabled) playNote(midi, velocity);
   drawPiano();
+  spawnLiveNote(midi, source);
   if (isRecording) {
     recOpenNotes[midi] = performance.now() - recStartTime;
     recNotesEl.textContent = (Object.keys(recOpenNotes).length + recNotes.length) + ' notes';
@@ -550,11 +612,45 @@ function onNoteOn(midi, velocity = 80, source = 'unknown') {
 function onNoteOff(midi) {
   activeKeys.delete(midi);
   drawPiano();
+  releaseLiveNote(midi);
   if (isRecording && recOpenNotes[midi] != null) {
     recNotes.push({ midi, startTime: recOpenNotes[midi], endTime: performance.now() - recStartTime });
     delete recOpenNotes[midi];
     recNotesEl.textContent = recNotes.length + ' notes';
   }
+}
+
+// ── NOTES EN DIRECT (s'étirent tant que la touche est maintenue) ──
+function spawnLiveNote(midi, source) {
+  // Évite les doublons si la note est déjà en cours (note répétée rapidement)
+  if (liveNoteBlocks[midi]) releaseLiveNote(midi);
+
+  const note = noteLayout.find(n => n.midi === midi);
+  if (!note) return;
+
+  const fallH = fallZone.offsetHeight;
+  const hand  = source === 'roland' || source === 'keyboard' || source === 'click' || source === 'touch'
+    ? (midi < 60 ? 'left' : 'right')
+    : 'right';
+
+  const el = document.createElement('div');
+  el.className = 'note-block ' + hand + ' live-note';
+  el.style.left   = note.x + 2 + 'px';
+  el.style.width  = note.w - 4 + 'px';
+  el.style.height = '4px';
+  el.style.top    = (fallH - 4) + 'px';
+  el.textContent  = NOTE_NAMES[note.n];
+  fallZone.appendChild(el);
+
+  liveNoteBlocks[midi] = { el, startTime: performance.now(), midi };
+}
+
+function releaseLiveNote(midi) {
+  const live = liveNoteBlocks[midi];
+  if (!live) return;
+  delete liveNoteBlocks[midi];
+  // La note continue de monter et disparaît une fois sortie de l'écran (gérée dans loop())
+  live.released = true;
 }
 
 // ── SCORE ──
@@ -642,7 +738,8 @@ function stopRecording() {
     duration: (n.endTime - n.startTime) / 1000, hand: 'recorded',
   })).sort((a, b) => a.time - b.time);
   document.getElementById('btn-playback').style.display = '';
-  setStatus('✅ ' + recNotes.length + ' notes — clique ▶ Réécouter');
+  saveRecordingToLibrary(recordedSong);
+  setStatus('✅ ' + recNotes.length + ' notes — sauvegardé dans Mes enregistrements');
 }
 
 function cancelRecording() {
@@ -661,6 +758,133 @@ function playbackRecording() {
   scheduledEvents = scheduledEvents.map(ev => ({ ...ev, time: ev.time + fallDelay / speedFactor }));
   playing = true;
   setStatus('▶ Relecture de ton enregistrement');
+}
+
+// ══════════════════════════════════════════════════
+// BIBLIOTHEQUE D'ENREGISTREMENTS (localStorage)
+// ══════════════════════════════════════════════════
+const LIBRARY_KEY = 'piano_recordings_library';
+
+function getLibrary() {
+  try {
+    const raw = localStorage.getItem(LIBRARY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(err) {
+    return [];
+  }
+}
+
+function setLibrary(lib) {
+  try {
+    localStorage.setItem(LIBRARY_KEY, JSON.stringify(lib));
+  } catch(err) {
+    setStatus('❌ Erreur sauvegarde : ' + err.message);
+  }
+}
+
+function saveRecordingToLibrary(song) {
+  const lib = getLibrary();
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('fr-FR') + ' ' + now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  lib.push({
+    id: 'rec_' + Date.now(),
+    name: 'Enregistrement du ' + dateStr,
+    date: now.toISOString(),
+    notesCount: song.length,
+    song: song,
+  });
+  setLibrary(lib);
+}
+
+function renderLibrary() {
+  const listEl = document.getElementById('library-list');
+  const lib = getLibrary().sort((a, b) => new Date(b.date) - new Date(a.date));
+  listEl.innerHTML = '';
+
+  if (lib.length === 0) {
+    listEl.innerHTML = '<div id="library-empty">Aucun enregistrement pour le moment.<br>Clique sur ⏺ Enregistrer pour commencer !</div>';
+    return;
+  }
+
+  lib.forEach(rec => {
+    const item = document.createElement('div');
+    item.className = 'lib-item';
+
+    const nameInput = document.createElement('input');
+    nameInput.className = 'lib-item-name';
+    nameInput.value = rec.name;
+    nameInput.addEventListener('change', () => renameRecording(rec.id, nameInput.value));
+
+    const meta = document.createElement('div');
+    meta.className = 'lib-item-meta';
+    const d = new Date(rec.date);
+    meta.textContent = d.toLocaleDateString('fr-FR') + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' — ' + rec.notesCount + ' notes';
+
+    const btns = document.createElement('div');
+    btns.className = 'lib-item-btns';
+
+    const playBtn = document.createElement('button');
+    playBtn.className = 'btn green';
+    playBtn.textContent = '▶ Jouer';
+    playBtn.addEventListener('click', () => {
+      recordedSong = rec.song;
+      document.getElementById('library-modal').classList.remove('visible');
+      playbackRecording();
+    });
+
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'btn';
+    downloadBtn.textContent = '⬇ Télécharger';
+    downloadBtn.addEventListener('click', () => downloadRecording(rec));
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn rec';
+    deleteBtn.textContent = '🗑 Supprimer';
+    deleteBtn.addEventListener('click', () => deleteRecording(rec.id));
+
+    btns.appendChild(playBtn);
+    btns.appendChild(downloadBtn);
+    btns.appendChild(deleteBtn);
+
+    item.appendChild(nameInput);
+    item.appendChild(meta);
+    item.appendChild(btns);
+    listEl.appendChild(item);
+  });
+}
+
+function renameRecording(id, newName) {
+  const lib = getLibrary();
+  const rec = lib.find(r => r.id === id);
+  if (rec) { rec.name = newName; setLibrary(lib); }
+}
+
+function deleteRecording(id) {
+  let lib = getLibrary();
+  lib = lib.filter(r => r.id !== id);
+  setLibrary(lib);
+  renderLibrary();
+}
+
+function downloadRecording(rec) {
+  const blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = rec.name.replace(/[^a-z0-9]/gi, '_') + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function openLibrary() {
+  renderLibrary();
+  document.getElementById('library-modal').classList.add('visible');
+}
+
+function closeLibrary() {
+  document.getElementById('library-modal').classList.remove('visible');
 }
 
 // ── LAYOUT CLAVIER ──
@@ -764,6 +988,28 @@ function loop(ts) {
     }
     if (scheduledEvents.length === 0 && noteBlocks.length === 0) { playing = false; setStatus('✅ Terminé'); }
   }
+
+  // Notes en direct : s'étirent vers le haut tant que maintenues,
+  // puis montent normalement une fois relâchées (comme Synthesia)
+  for (const midi in liveNoteBlocks) {
+    const live = liveNoteBlocks[midi];
+    const bottom = parseFloat(live.el.style.top) + parseFloat(live.el.style.height);
+
+    if (!live.released) {
+      // Touche maintenue : la note grandit vers le haut, le bas reste collé à la ligne d'impact
+      const newHeight = parseFloat(live.el.style.height) + speed * dt;
+      live.el.style.height = newHeight + 'px';
+      live.el.style.top = (fallH - newHeight) + 'px';
+    } else {
+      // Touche relâchée : le bloc entier monte, comme un bloc normal
+      const newTop = parseFloat(live.el.style.top) - speed * dt;
+      live.el.style.top = newTop + 'px';
+      if (newTop + parseFloat(live.el.style.height) < 0) {
+        live.el.remove();
+        delete liveNoteBlocks[midi];
+      }
+    }
+  }
 }
 
 function spawnNote(midi, hand = 'right', durationSec = 0.3) {
@@ -848,6 +1094,8 @@ function startSong() {
 function stopSong() {
   playing=false; scheduledEvents=[]; songStartTime=null;
   noteBlocks.forEach(b=>b.el.remove()); noteBlocks=[];
+  for (const midi in liveNoteBlocks) { liveNoteBlocks[midi].el.remove(); }
+  liveNoteBlocks = {};
   activeKeys.clear(); activeTouches={};
   drawPiano(); setStatus('Arrêté');
 }
