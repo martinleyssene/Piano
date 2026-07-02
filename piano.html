@@ -464,7 +464,12 @@
   <div id="library-box">
     <div id="library-header">
       <h2>📁 Mes enregistrements</h2>
-      <button class="btn" id="btn-close-library">✕ Fermer</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label id="btn-import-label" class="btn" style="cursor:pointer">⬆ Importer
+          <input type="file" id="import-file" accept=".json" style="display:none">
+        </label>
+        <button class="btn" id="btn-close-library">✕ Fermer</button>
+      </div>
     </div>
     <div id="library-list"></div>
   </div>
@@ -539,8 +544,7 @@ let pianoCanvas, pianoCtx, gridCanvas, gridCtx, fallZone;
 let whiteW, blackW, blackH;
 let totalWhites, noteLayout = [];
 let activeKeys     = new Set();
-let liveNoteBlocks = {}; // midi → { el, top, height, released }
-let releasedLiveBlocks = []; // blocs relâchés qui montent encore
+let liveNoteBlocks = {}; // midi → { el, startTime }
 let noteBlocks     = [];
 let lastTime       = null;
 let playing        = false;
@@ -684,6 +688,7 @@ window.addEventListener('load', () => {
   document.getElementById('btn-playback').addEventListener('click', playbackRecording);
   document.getElementById('btn-library').addEventListener('click', openLibrary);
   document.getElementById('btn-close-library').addEventListener('click', closeLibrary);
+  document.getElementById('import-file').addEventListener('change', importRecording);
   document.getElementById('btn-score').addEventListener('click', toggleScore);
   document.getElementById('midi-file').addEventListener('change', loadMidi);
 
@@ -736,15 +741,6 @@ window.addEventListener('load', () => {
 
   // Init events éditeur canvas (une fois le DOM prêt)
   setTimeout(initEditorEvents, 100);
-
-  // Déverrouillage audio iOS au premier toucher/clic sur la page
-  const unlockAudio = () => {
-    getAudio();
-    document.removeEventListener('touchstart', unlockAudio);
-    document.removeEventListener('mousedown', unlockAudio);
-  };
-  document.addEventListener('touchstart', unlockAudio, { once: true });
-  document.addEventListener('mousedown', unlockAudio, { once: true });
 
   requestAnimationFrame(loop);
 });
@@ -800,10 +796,7 @@ function onNoteOn(midi, velocity = 80, source = 'unknown') {
   activeKeys.add(midi);
   if (soundEnabled) playNote(midi, velocity);
   drawPiano();
-  // Notes live seulement quand c'est l'utilisateur qui joue (pas la lecture automatique)
-  if (source === 'roland' || source === 'keyboard' || source === 'click' || source === 'touch') {
-    spawnLiveNote(midi, source);
-  }
+  spawnLiveNote(midi, source);
   if (isRecording) {
     recOpenNotes[midi] = performance.now() - recStartTime;
     recNotesEl.textContent = (Object.keys(recOpenNotes).length + recNotes.length) + ' notes';
@@ -824,15 +817,7 @@ function onNoteOff(midi) {
 
 // ── NOTES EN DIRECT (s'étirent tant que la touche est maintenue) ──
 function spawnLiveNote(midi, source) {
-  // Si la même note est déjà en cours, on libère l'ancien bloc
-  // mais on le déplace dans un tableau séparé pour qu'il continue d'être animé
-  if (liveNoteBlocks[midi]) {
-    const old = liveNoteBlocks[midi];
-    old.released = true;
-    // On le transfère dans releasedBlocks pour que loop() continue de l'animer
-    releasedLiveBlocks.push(old);
-    delete liveNoteBlocks[midi];
-  }
+  if (liveNoteBlocks[midi]) releaseLiveNote(midi);
   const note = noteLayout.find(n => n.midi === midi);
   if (!note) return;
   const fallH = fallZone.offsetHeight;
@@ -845,16 +830,16 @@ function spawnLiveNote(midi, source) {
   el.style.top    = (fallH - 4) + 'px';
   el.textContent  = NOTE_NAMES[note.n];
   fallZone.appendChild(el);
+  // On stocke top et height pour pouvoir les animer dans loop()
   liveNoteBlocks[midi] = { el, midi, top: fallH - 4, height: 4, released: false };
 }
 
 function releaseLiveNote(midi) {
   const live = liveNoteBlocks[midi];
   if (!live) return;
+  // On marque released = true SANS supprimer de liveNoteBlocks
+  // La boucle loop() s'occupe de l'animer puis de le supprimer une fois sorti
   live.released = true;
-  // Transfert dans releasedBlocks pour animation de sortie
-  releasedLiveBlocks.push(live);
-  delete liveNoteBlocks[midi];
 }
 
 // ── SCORE ──
@@ -1098,6 +1083,37 @@ function openLibrary() {
 
 function closeLibrary() {
   document.getElementById('library-modal').classList.remove('visible');
+}
+
+async function importRecording(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const rec  = JSON.parse(text);
+
+    // Vérifier que c'est bien un enregistrement valide
+    if (!rec.song || !Array.isArray(rec.song)) {
+      alert('❌ Fichier invalide — ce n\'est pas un enregistrement piano.');
+      return;
+    }
+
+    // Si l'id existe déjà, on génère un nouvel id pour éviter les doublons
+    const lib = getLibrary();
+    if (lib.find(r => r.id === rec.id)) {
+      rec.id = 'rec_' + Date.now();
+      rec.name = rec.name + ' (importé)';
+    }
+
+    lib.push(rec);
+    setLibrary(lib);
+    renderLibrary();
+    setStatus('✅ "' + rec.name + '" importé !');
+  } catch(err) {
+    alert('❌ Erreur lors de l\'import : ' + err.message);
+  }
+  // Réinitialiser l'input pour pouvoir réimporter le même fichier
+  e.target.value = '';
 }
 
 // ══════════════════════════════════════════════════
@@ -1493,25 +1509,27 @@ function loop(ts) {
     if (scheduledEvents.length === 0 && noteBlocks.length === 0) { playing = false; setStatus('✅ Terminé'); }
   }
 
-  // Notes live actives (touche maintenue)
+  // Notes en direct : s'étirent vers le haut tant que maintenues,
+  // puis montent et disparaissent une fois relâchées
   const liveMidis = Object.keys(liveNoteBlocks);
   for (const midi of liveMidis) {
     const live = liveNoteBlocks[midi];
     if (!live) continue;
-    live.height += speed * dt;
-    live.top = fallH - live.height;
-    live.el.style.height = live.height + 'px';
-    live.el.style.top    = live.top + 'px';
-  }
 
-  // Blocs relâchés qui montent et disparaissent
-  for (let i = releasedLiveBlocks.length - 1; i >= 0; i--) {
-    const live = releasedLiveBlocks[i];
-    live.top -= speed * dt;
-    live.el.style.top = live.top + 'px';
-    if (live.top + live.height < 0) {
-      live.el.remove();
-      releasedLiveBlocks.splice(i, 1);
+    if (!live.released) {
+      // Touche maintenue : grandit vers le haut, bas reste sur la ligne d'impact
+      live.height += speed * dt;
+      live.top = fallH - live.height;
+      live.el.style.height = live.height + 'px';
+      live.el.style.top    = live.top + 'px';
+    } else {
+      // Touche relâchée : le bloc entier monte et sort par le haut
+      live.top -= speed * dt;
+      live.el.style.top = live.top + 'px';
+      if (live.top + live.height < 0) {
+        live.el.remove();
+        delete liveNoteBlocks[midi];
+      }
     }
   }
 }
@@ -1544,23 +1562,19 @@ function findNoteAt(x, y) {
 let audioCtx = null;
 function getAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  // iOS suspend le contexte audio — il faut le reprendre après chaque interaction
-  if (audioCtx.state === 'suspended') audioCtx.resume();
   return audioCtx;
 }
 
 function playNote(midi, velocity = 80) {
   if (!soundEnabled) return;
-  try {
-    const ctx = getAudio();
-    const freq = 440 * Math.pow(2, (midi-69)/12), vol = (velocity/127)*0.25;
-    const osc = ctx.createOscillator(), gain = ctx.createGain();
-    osc.type = 'triangle'; osc.frequency.value = freq;
-    gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.start(); osc.stop(ctx.currentTime + 0.5);
-  } catch(e) { console.warn('Audio error:', e); }
+  const ctx = getAudio();
+  const freq = 440 * Math.pow(2, (midi-69)/12), vol = (velocity/127)*0.25;
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'triangle'; osc.frequency.value = freq;
+  gain.gain.setValueAtTime(vol, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime + 0.5);
 }
 
 // ── DEMO ──
@@ -1604,8 +1618,6 @@ function stopSong() {
   noteBlocks.forEach(b=>b.el.remove()); noteBlocks=[];
   for (const midi in liveNoteBlocks) { liveNoteBlocks[midi].el.remove(); }
   liveNoteBlocks = {};
-  releasedLiveBlocks.forEach(b => b.el.remove());
-  releasedLiveBlocks = [];
   activeKeys.clear(); activeTouches={};
   drawPiano(); setStatus('Arrêté');
 }
