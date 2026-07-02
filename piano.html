@@ -736,6 +736,15 @@ window.addEventListener('load', () => {
   // Init events éditeur canvas (une fois le DOM prêt)
   setTimeout(initEditorEvents, 100);
 
+  // Déverrouillage audio iOS au premier toucher/clic sur la page
+  const unlockAudio = () => {
+    getAudio();
+    document.removeEventListener('touchstart', unlockAudio);
+    document.removeEventListener('mousedown', unlockAudio);
+  };
+  document.addEventListener('touchstart', unlockAudio, { once: true });
+  document.addEventListener('mousedown', unlockAudio, { once: true });
+
   requestAnimationFrame(loop);
 });
 
@@ -790,7 +799,10 @@ function onNoteOn(midi, velocity = 80, source = 'unknown') {
   activeKeys.add(midi);
   if (soundEnabled) playNote(midi, velocity);
   drawPiano();
-  spawnLiveNote(midi, source);
+  // Notes live seulement quand c'est l'utilisateur qui joue (pas la lecture automatique)
+  if (source === 'roland' || source === 'keyboard' || source === 'click' || source === 'touch') {
+    spawnLiveNote(midi, source);
+  }
   if (isRecording) {
     recOpenNotes[midi] = performance.now() - recStartTime;
     recNotesEl.textContent = (Object.keys(recOpenNotes).length + recNotes.length) + ' notes';
@@ -1525,19 +1537,23 @@ function findNoteAt(x, y) {
 let audioCtx = null;
 function getAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  // iOS suspend le contexte audio — il faut le reprendre après chaque interaction
+  if (audioCtx.state === 'suspended') audioCtx.resume();
   return audioCtx;
 }
 
 function playNote(midi, velocity = 80) {
   if (!soundEnabled) return;
-  const ctx = getAudio();
-  const freq = 440 * Math.pow(2, (midi-69)/12), vol = (velocity/127)*0.25;
-  const osc = ctx.createOscillator(), gain = ctx.createGain();
-  osc.type = 'triangle'; osc.frequency.value = freq;
-  gain.gain.setValueAtTime(vol, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-  osc.connect(gain); gain.connect(ctx.destination);
-  osc.start(); osc.stop(ctx.currentTime + 0.5);
+  try {
+    const ctx = getAudio();
+    const freq = 440 * Math.pow(2, (midi-69)/12), vol = (velocity/127)*0.25;
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = 'triangle'; osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.5);
+  } catch(e) { console.warn('Audio error:', e); }
 }
 
 // ── DEMO ──
