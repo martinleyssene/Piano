@@ -539,7 +539,8 @@ let pianoCanvas, pianoCtx, gridCanvas, gridCtx, fallZone;
 let whiteW, blackW, blackH;
 let totalWhites, noteLayout = [];
 let activeKeys     = new Set();
-let liveNoteBlocks = {}; // midi → { el, startTime }
+let liveNoteBlocks = {}; // midi → { el, top, height, released }
+let releasedLiveBlocks = []; // blocs relâchés qui montent encore
 let noteBlocks     = [];
 let lastTime       = null;
 let playing        = false;
@@ -823,7 +824,15 @@ function onNoteOff(midi) {
 
 // ── NOTES EN DIRECT (s'étirent tant que la touche est maintenue) ──
 function spawnLiveNote(midi, source) {
-  if (liveNoteBlocks[midi]) releaseLiveNote(midi);
+  // Si la même note est déjà en cours, on libère l'ancien bloc
+  // mais on le déplace dans un tableau séparé pour qu'il continue d'être animé
+  if (liveNoteBlocks[midi]) {
+    const old = liveNoteBlocks[midi];
+    old.released = true;
+    // On le transfère dans releasedBlocks pour que loop() continue de l'animer
+    releasedLiveBlocks.push(old);
+    delete liveNoteBlocks[midi];
+  }
   const note = noteLayout.find(n => n.midi === midi);
   if (!note) return;
   const fallH = fallZone.offsetHeight;
@@ -836,16 +845,16 @@ function spawnLiveNote(midi, source) {
   el.style.top    = (fallH - 4) + 'px';
   el.textContent  = NOTE_NAMES[note.n];
   fallZone.appendChild(el);
-  // On stocke top et height pour pouvoir les animer dans loop()
   liveNoteBlocks[midi] = { el, midi, top: fallH - 4, height: 4, released: false };
 }
 
 function releaseLiveNote(midi) {
   const live = liveNoteBlocks[midi];
   if (!live) return;
-  // On marque released = true SANS supprimer de liveNoteBlocks
-  // La boucle loop() s'occupe de l'animer puis de le supprimer une fois sorti
   live.released = true;
+  // Transfert dans releasedBlocks pour animation de sortie
+  releasedLiveBlocks.push(live);
+  delete liveNoteBlocks[midi];
 }
 
 // ── SCORE ──
@@ -1484,27 +1493,25 @@ function loop(ts) {
     if (scheduledEvents.length === 0 && noteBlocks.length === 0) { playing = false; setStatus('✅ Terminé'); }
   }
 
-  // Notes en direct : s'étirent vers le haut tant que maintenues,
-  // puis montent et disparaissent une fois relâchées
+  // Notes live actives (touche maintenue)
   const liveMidis = Object.keys(liveNoteBlocks);
   for (const midi of liveMidis) {
     const live = liveNoteBlocks[midi];
     if (!live) continue;
+    live.height += speed * dt;
+    live.top = fallH - live.height;
+    live.el.style.height = live.height + 'px';
+    live.el.style.top    = live.top + 'px';
+  }
 
-    if (!live.released) {
-      // Touche maintenue : grandit vers le haut, bas reste sur la ligne d'impact
-      live.height += speed * dt;
-      live.top = fallH - live.height;
-      live.el.style.height = live.height + 'px';
-      live.el.style.top    = live.top + 'px';
-    } else {
-      // Touche relâchée : le bloc entier monte et sort par le haut
-      live.top -= speed * dt;
-      live.el.style.top = live.top + 'px';
-      if (live.top + live.height < 0) {
-        live.el.remove();
-        delete liveNoteBlocks[midi];
-      }
+  // Blocs relâchés qui montent et disparaissent
+  for (let i = releasedLiveBlocks.length - 1; i >= 0; i--) {
+    const live = releasedLiveBlocks[i];
+    live.top -= speed * dt;
+    live.el.style.top = live.top + 'px';
+    if (live.top + live.height < 0) {
+      live.el.remove();
+      releasedLiveBlocks.splice(i, 1);
     }
   }
 }
@@ -1597,6 +1604,8 @@ function stopSong() {
   noteBlocks.forEach(b=>b.el.remove()); noteBlocks=[];
   for (const midi in liveNoteBlocks) { liveNoteBlocks[midi].el.remove(); }
   liveNoteBlocks = {};
+  releasedLiveBlocks.forEach(b => b.el.remove());
+  releasedLiveBlocks = [];
   activeKeys.clear(); activeTouches={};
   drawPiano(); setStatus('Arrêté');
 }
