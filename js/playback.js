@@ -94,7 +94,8 @@ function loop(ts) {
     // La note touche le clavier : on démarre le son et on allume la touche
     if (y + b.noteHeight >= fallH && !b.triggered) {
       b.triggered = true;
-      if (!rolandInput && soundEnabled && typeof playNote === "function") {
+      // Le piano ne reçoit rien de l'app : la relecture doit donc sonner sur le PC (sauf si Son OFF)
+      if (soundEnabled && typeof playNote === "function") {
         playNote(b.midi, 80);
       }
       activeKeys.add(b.midi);

@@ -17,14 +17,24 @@ function findNoteAt(x, y) {
   return found;
 }
 
+// Vrai si l'utilisateur est en train d'écrire dans un champ de texte (titre d'un enregistrement, etc.)
+function isTypingInField(e) {
+  const el = e.target;
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+}
+
 function initKeyboardControls() {
   document.addEventListener('keydown', e => {
     if (e.repeat) return;
+    if (isTypingInField(e)) return; // on tape du texte : pas de notes
     const midi = KEY_MAP[e.key.toLowerCase()];
     if (midi != null) onNoteOn(midi, 80, 'keyboard');
   });
 
   document.addEventListener('keyup', e => {
+    if (isTypingInField(e)) return;
     const midi = KEY_MAP[e.key.toLowerCase()];
     if (midi != null) onNoteOff(midi);
   });
