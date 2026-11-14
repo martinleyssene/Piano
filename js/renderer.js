@@ -9,6 +9,9 @@ function buildLayout() {
       if (!isBlack) totalWhites++;
     }
   }
+  // Touche finale : le Do le plus aigu (C7), pour avoir les 61 touches du GO:PIANO (C2 à C7)
+  noteLayout.push({ midi: (START_OCTAVE + NUM_OCTAVES + 1) * 12, isBlack: false, n: 0, oct: START_OCTAVE + NUM_OCTAVES });
+  totalWhites++;
 }
 
 function resizeAll() {
@@ -114,9 +117,9 @@ function drawEditor() {
   const H = editorCanvas.height;
   editorCtx.clearRect(0, 0, W, H);
 
-  for (let i = 0; i < NUM_OCTAVES * 12; i++) {
+  for (let i = 0; i < NUM_OCTAVES * 12 + 1; i++) {
     const y = i * EDITOR_ROW_H;
-    const midi = (START_OCTAVE + NUM_OCTAVES + 1) * 12 - 1 - i;
+    const midi = (START_OCTAVE + NUM_OCTAVES + 1) * 12 - i;
     const isBlack = [1, 3, 6, 8, 10].includes(midi % 12);
     editorCtx.fillStyle = isBlack ? '#0e0e16' : '#12121c';
     editorCtx.fillRect(EDITOR_PIANO_W, y, W - EDITOR_PIANO_W, EDITOR_ROW_H);

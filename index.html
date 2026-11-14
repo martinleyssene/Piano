@@ -616,8 +616,12 @@ function ensureAudioContext() {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
         masterGain = audioContext.createGain();
-        masterGain.gain.value = 0.25;
-        masterGain.connect(audioContext.destination);
+        masterGain.gain.value = 0.6;
+        // Compresseur : évite la saturation quand plusieurs notes jouent ensemble
+        const compressor = audioContext.createDynamicsCompressor();
+        masterGain.connect(compressor);
+        compressor.connect(audioContext.destination);
+        loadPianoSamples(); // téléchargement des sons de piano en arrière-plan
 
     }
 
@@ -633,7 +637,8 @@ function midiToFrequency(midi) {
     return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-function playNote(midi, velocity = 80) {
+// Son de secours (synthétique). Le vrai son de piano est dans js/audio.js
+function playNoteOscillator(midi, velocity = 80) {
 
     ensureAudioContext();
 
@@ -658,7 +663,7 @@ const volume = Math.max(0.02, Math.min(velocity / 127, 1));
 gain.gain.cancelScheduledValues(audioContext.currentTime);
 gain.gain.setValueAtTime(0, audioContext.currentTime);
 gain.gain.linearRampToValueAtTime(
-    volume * 0.18,
+    volume * 0.075,
     audioContext.currentTime + 0.01
 );
 
@@ -683,13 +688,13 @@ function stopNote(midi) {
 
     voice.gain.gain.cancelScheduledValues(now);
     voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
-    voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
 
     // On retire immédiatement la voix de la Map
     activeVoices.delete(midi);
 
     try {
-        voice.oscillator.stop(now + 0.12);
+        voice.oscillator.stop(now + 0.35);
     } catch (e) {
         // Oscillateur déjà arrêté
     }
@@ -1347,7 +1352,7 @@ function closeEditor() {
 }
 
 function initEditorCanvas() {
-  const totalMidi   = NUM_OCTAVES * 12;
+  const totalMidi   = NUM_OCTAVES * 12 + 1;
   const maxTime     = Math.max(...editorNotes.map(n => n.time + n.duration), 4);
   const W = EDITOR_PIANO_W + Math.ceil(maxTime * EDITOR_PX_S) + 80;
   const H = totalMidi * EDITOR_ROW_H;
@@ -1367,7 +1372,7 @@ function initEditorCanvas() {
 
 function midiToRow(midi) {
   // MIDI le plus haut en haut
-  const maxMidi = (START_OCTAVE + NUM_OCTAVES + 1) * 12 - 1;
+  const maxMidi = (START_OCTAVE + NUM_OCTAVES + 1) * 12;
   return maxMidi - midi;
 }
 
@@ -1377,9 +1382,9 @@ function drawEditor() {
   editorCtx.clearRect(0, 0, W, H);
 
   // Fond avec lignes de grille
-  for (let i = 0; i < NUM_OCTAVES * 12; i++) {
+  for (let i = 0; i < NUM_OCTAVES * 12 + 1; i++) {
     const y = i * EDITOR_ROW_H;
-    const midi = (START_OCTAVE + NUM_OCTAVES + 1) * 12 - 1 - i;
+    const midi = (START_OCTAVE + NUM_OCTAVES + 1) * 12 - i;
     const isBlack = [1,3,6,8,10].includes(midi % 12);
     editorCtx.fillStyle = isBlack ? '#0e0e16' : '#12121c';
     editorCtx.fillRect(EDITOR_PIANO_W, y, W - EDITOR_PIANO_W, EDITOR_ROW_H);
@@ -1603,5 +1608,6 @@ function saveEditor() {
 <script src="js/renderer.js"></script>
 <script src="js/playback.js"></script>
 <script src="js/keyboard.js"></script>
+<script src="js/audio.js"></script>
 </body>
 </html>
