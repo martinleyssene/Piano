@@ -12,6 +12,7 @@
     font-family: 'Segoe UI', sans-serif;
     color: #ccc;
     height: 100vh;
+    height: 100dvh; /* hauteur réellement visible sur téléphone (barre du navigateur déduite) */
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -619,7 +620,7 @@ function ensureAudioContext() {
 
     }
 
-    if (audioContext.state === "suspended") {
+    if (audioContext.state === "suspended" || audioContext.state === "interrupted") {
     audioContext.resume().catch(err => {
         console.warn("Impossible de reprendre AudioContext :", err);
     });
@@ -709,9 +710,19 @@ window.addEventListener('load', () => {
 
   initKeyboardControls();
 
+  // Déverrouillage du son : un toucher / clic n'importe où sur la page (y compris
+  // au-dessus du clavier) suffit à activer l'audio du navigateur.
+  const UNLOCK_EVENTS = ['touchstart', 'touchend', 'mousedown', 'pointerup', 'click', 'keydown'];
+  const unlockAudio = () => {
+    ensureAudioContext();
+    if (audioContext && audioContext.state === 'running') {
+      UNLOCK_EVENTS.forEach(ev => document.removeEventListener(ev, unlockAudio, true));
+    }
+  };
+  UNLOCK_EVENTS.forEach(ev => document.addEventListener(ev, unlockAudio, true));
+
   // Boutons
   document.getElementById('btn-connect-midi').addEventListener('click', connectMidi);
-  console.log("typeof startSong =", typeof startSong);
   document.getElementById('btn-play').addEventListener('click', startSong);
   document.getElementById('btn-stop').addEventListener('click', stopSong);
   document.getElementById('btn-demo').addEventListener('click', runDemo);
@@ -768,7 +779,12 @@ window.addEventListener('load', () => {
   });
 
   document.getElementById('speed').addEventListener('input', e => {
+    const oldSongTime = getSongTime();
     speedFactor = parseFloat(e.target.value);
+    // On garde la même position dans le morceau quand on change la vitesse en cours de lecture
+    if (playing && songStartTime !== null) {
+      songStartTime = performance.now() - (oldSongTime * 1000) / speedFactor;
+    }
     document.getElementById('speed-val').textContent = '×' + speedFactor.toFixed(1);
   });
 
@@ -837,7 +853,7 @@ function onNoteOn(midi, velocity = 80, source = 'unknown') {
   drawPiano();
   spawnLiveNote(midi, source);
   if (isRecording) {
-    recOpenNotes[midi] = getSongTime();
+    recOpenNotes[midi] = performance.now() - recStartTime; // en millisecondes depuis le début de l'enregistrement
     recNotesEl.textContent = (Object.keys(recOpenNotes).length + recNotes.length) + ' notes';
   }
   if (scoreEnabled && playing) checkScoreHit(midi);
@@ -852,7 +868,7 @@ if (soundEnabled) {
   drawPiano();
   releaseLiveNote(midi);
   if (isRecording && recOpenNotes[midi] != null) {
-    const endTime = getSongTime();
+    const endTime = performance.now() - recStartTime; // en millisecondes depuis le début de l'enregistrement
 
 recNotes.push({
     midi,
@@ -956,7 +972,7 @@ function checkScoreHit(playedMidi) {
   let best = null, bestDist = Infinity;
   for (const b of noteBlocks) {
     if (b.midi !== playedMidi) continue;
-    const bottom = b.top + parseFloat(b.el.style.height);
+    const bottom = parseFloat(b.el.style.top) + b.noteHeight;
     const dist = Math.abs(bottom - fallH);
     if (dist < tolerance && dist < bestDist) { best = b; bestDist = dist; }
   }
@@ -1030,9 +1046,7 @@ function playbackRecording() {
   if (!recordedSong) return;
   stopSong();
   scheduledEvents = [...recordedSong];
-  const fallDelay = fallZone.offsetHeight / (FALL_SPEED * speedFactor);
-  songStartTime = performance.now() + fallDelay * 1000;
-  scheduledEvents = scheduledEvents.map(ev => ({ ...ev, time: ev.time + fallDelay / speedFactor }));
+  songStartTime = performance.now();
   playing = true;
   setStatus('▶ Relecture de ton enregistrement');
 }
@@ -1501,9 +1515,7 @@ function saveEditor() {
 }
 </script>
 <script src="js/renderer.js"></script>
-<script>console.log('avant playback.js');</script>
 <script src="js/playback.js"></script>
-<script>console.log('après playback.js');</script>
 <script src="js/keyboard.js"></script>
 </body>
 </html>

@@ -12,7 +12,7 @@ let nextLiveNoteId = 1;
 
 function getSongTime() {
   if (!playing || songStartTime === null) return 0;
-  return (performance.now() - songStartTime) / 1000 / speedFactor;
+  return (performance.now() - songStartTime) / 1000 * speedFactor;
 }
 
 function getLiveTime() {
@@ -37,16 +37,17 @@ function getNoteScreenY(songTime, note, fallH, PIXELS_PER_SECOND) {
 function spawnNote(midi, hand = 'right', durationSec = 0.3) {
   const note = noteLayout.find(n => n.midi === midi);
   if (!note) return;
-  const PIXELS_PER_SECOND = FALL_SPEED * speedFactor;
+  const PIXELS_PER_SECOND = FALL_SPEED; // pixels par seconde de morceau (la vitesse agit sur l'horloge)
   const noteHeight = Math.max(18, durationSec * PIXELS_PER_SECOND);
   const el = document.createElement('div');
   el.className = 'note-block ' + hand;
   el.style.left = note.x + 2 + 'px';
   el.style.width = note.w - 4 + 'px';
   el.style.height = noteHeight + 'px';
+  el.style.top = (-noteHeight) + 'px'; // démarre au-dessus de l'écran (évite le clignotement)
   el.textContent = NOTE_NAMES[note.n];
   fallZone.appendChild(el);
-  const songTime = getLiveTime();
+  const songTime = getSongTime(); // la note démarre tout en haut au moment où elle apparaît
   noteBlocks.push({
     el, midi, hand,
     startTime: songTime,
@@ -63,7 +64,7 @@ function loop(ts) {
 
   const songTime = getSongTime();
   const fallH = fallZone.offsetHeight;
-  const PIXELS_PER_SECOND = FALL_SPEED * speedFactor;
+  const PIXELS_PER_SECOND = FALL_SPEED;
 
   if (DEBUG_ENGINE) {
     debugFrameCount++;
@@ -90,6 +91,7 @@ function loop(ts) {
     const y = getNoteScreenY(songTime, b, fallH, PIXELS_PER_SECOND);
     b.el.style.top = y + 'px';
 
+    // La note touche le clavier : on démarre le son et on allume la touche
     if (y + b.noteHeight >= fallH && !b.triggered) {
       b.triggered = true;
       if (!rolandInput && soundEnabled && typeof playNote === "function") {
@@ -100,9 +102,16 @@ function loop(ts) {
       b.el.classList.add('hit');
     }
 
-    if (y > fallH + 20) {
+    // La fin de la note arrive au clavier : on coupe le son et on éteint la touche
+    if (b.triggered && !b.ended && y >= fallH) {
+      b.ended = true;
+      if (typeof stopNote === "function") stopNote(b.midi);
       activeKeys.delete(b.midi);
       drawPiano();
+    }
+
+    // La note est sortie de l'écran : on la supprime
+    if (y > fallH + 20) {
       b.el.remove();
       noteBlocks.splice(i, 1);
     }
@@ -155,8 +164,7 @@ function startSong() {
     return;
   }
   playing = true;
-  const fallDelay = fallZone.offsetHeight / (FALL_SPEED * speedFactor);
-  songStartTime = performance.now() + fallDelay * 1000;
+  songStartTime = performance.now();
 }
 
 function stopSong() {
@@ -171,6 +179,7 @@ function stopSong() {
     liveNoteBlocks[midi].el.remove();
   }
   liveNoteBlocks = {};
+  for (const m of Array.from(activeVoices.keys())) stopNote(m); // coupe tous les sons en cours
   activeKeys.clear();
   activeTouches = {};
   drawPiano();
@@ -205,9 +214,7 @@ function runDemo() {
     e(28, 74, 'right', 1), e(29, 72, 'right', 1), e(30, 71, 'right', 2),
   ];
   scheduledEvents = [...left, ...melody];
-  const fallDelay = fallZone.offsetHeight / (FALL_SPEED * speedFactor);
-  songStartTime = performance.now() + fallDelay * 1000;
-  scheduledEvents = scheduledEvents.map(ev => ({ ...ev, time: ev.time + fallDelay / speedFactor }));
+  songStartTime = performance.now();
   playing = true;
   if (scoreEnabled) resetScore();
 }
@@ -222,9 +229,7 @@ async function loadMidi(e) {
     stopSong();
     scheduledEvents = events;
     setStatus(`✅ ${file.name} — ${events.length} notes`);
-    const fallDelay = fallZone.offsetHeight / (FALL_SPEED * speedFactor);
-    songStartTime = performance.now() + fallDelay * 1000;
-    scheduledEvents = scheduledEvents.map(ev => ({ ...ev, time: ev.time + fallDelay / speedFactor }));
+    songStartTime = performance.now();
     playing = true;
     if (scoreEnabled) resetScore();
   } catch (err) {
