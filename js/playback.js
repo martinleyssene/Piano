@@ -1,10 +1,12 @@
-// Debug engine
-console.log("PLAYBACK TEST 12345");
-const DEBUG_ENGINE = false;let debugLastTime = performance.now();
+// ===== Moteur de lecture et notes en direct (V1.3A.2) =====
+
+// Mode debug (affiche FPS, temps, vitesse) : mettre true pour l'activer
+const DEBUG_ENGINE = false;
+let debugLastTime = performance.now();
 let debugFrameCount = 0;
 let debugFPS = 0;
 
-// ===== Nouveau moteur des notes live (V1.3A.2) =====
+// Notes jouées en direct (s'étirent tant que la touche est maintenue)
 let liveNotes = [];
 let nextLiveNoteId = 1;
 
@@ -18,44 +20,18 @@ function getLiveTime() {
 }
 
 /**
- * ═══════════════════════════════════════════════════════════════════
- * CALCUL UNIFIÉ DE POSITION VERTICALE - FORMULE MATHÉMATIQUE UNIQUE
- * ═══════════════════════════════════════════════════════════════════
- * 
- * Principe : Mouvement linéaire à vitesse constante PIXELS_PER_SECOND
- * 
- * Formule générale :
- *   Y(t) = Y₀ + v · (t - t₀)
- * 
- * où :
- *   Y(t)  = position à l'écran (pixels, 0 = haut, ↑ = vers bas)
- *   Y₀    = position initiale
- *   v     = vitesse en pixels/seconde (+ = chute, - = montée)
- *   t     = temps courant du morceau (secondes)
- *   t₀    = temps de démarrage de l'événement (secondes)
- * 
- * Cas appliqués :
- *   • Notes planifiées    : Y = -noteHeight + (t - tStart) · v  [chute]
- *   • Notes live actives  : Y = fallH - max(4, (t - tStart) · v) [étirement]
- *   • Notes live relâchées: Y = fallH - (t - tRelease) · v      [montée]
- * ═══════════════════════════════════════════════════════════════════
+ * Position verticale d'une note planifiée (chute à vitesse constante)
+ *   Y = -hauteur + (tempsMorceau - tempsDébutNote) * pixelsParSeconde
  */
 function getNoteScreenY(songTime, note, fallH, PIXELS_PER_SECOND) {
-
-    // Notes live : cette fonction n'est plus utilisée par le moteur live.
-    // Elles sont entièrement animées dans loop().
-
-    if (note.liveActive) {
-        return fallH - 4;
-    }
-
-    // Notes planifiées
-
-    return (
-        -note.noteHeight
-        + (songTime - note.startTime) * PIXELS_PER_SECOND
-    );
-
+  // Notes live : animées directement dans loop()
+  if (note.liveActive) {
+    return fallH - 4;
+  }
+  return (
+    -note.noteHeight
+    + (songTime - note.startTime) * PIXELS_PER_SECOND
+  );
 }
 
 function spawnNote(midi, hand = 'right', durationSec = 0.3) {
@@ -71,23 +47,24 @@ function spawnNote(midi, hand = 'right', durationSec = 0.3) {
   el.textContent = NOTE_NAMES[note.n];
   fallZone.appendChild(el);
   const songTime = getLiveTime();
-  noteBlocks.push({ 
-    el, midi, hand, 
-    startTime: songTime, 
+  noteBlocks.push({
+    el, midi, hand,
+    startTime: songTime,
     noteHeight,
     releaseTime: null,
     liveActive: false,
-    triggered: false 
+    triggered: false
   });
 }
 
+// ===== Boucle principale (appelée à chaque image) =====
 function loop(ts) {
   requestAnimationFrame(loop);
-  
+
   const songTime = getSongTime();
   const fallH = fallZone.offsetHeight;
   const PIXELS_PER_SECOND = FALL_SPEED * speedFactor;
-  
+
   if (DEBUG_ENGINE) {
     debugFrameCount++;
     const now = performance.now();
@@ -106,23 +83,23 @@ function loop(ts) {
   } else {
     document.getElementById('debug-panel').classList.remove('visible');
   }
-  
-  // ── NOTES PLANIFIÉES (MIDI / Démo) ──
+
+  // ── NOTES PLANIFIÉES (MIDI / Démo / Relecture) ──
   for (let i = noteBlocks.length - 1; i >= 0; i--) {
     const b = noteBlocks[i];
     const y = getNoteScreenY(songTime, b, fallH, PIXELS_PER_SECOND);
     b.el.style.top = y + 'px';
-    
+
     if (y + b.noteHeight >= fallH && !b.triggered) {
       b.triggered = true;
       if (!rolandInput && soundEnabled && typeof playNote === "function") {
-    playNote(b.midi, 80);
-}
+        playNote(b.midi, 80);
+      }
       activeKeys.add(b.midi);
       drawPiano();
       b.el.classList.add('hit');
     }
-    
+
     if (y > fallH + 20) {
       activeKeys.delete(b.midi);
       drawPiano();
@@ -130,7 +107,7 @@ function loop(ts) {
       noteBlocks.splice(i, 1);
     }
   }
-  
+
   // ── ORDONNANCEMENT DES NOTES FUTURES ──
   if (playing && songStartTime != null) {
     for (let i = scheduledEvents.length - 1; i >= 0; i--) {
@@ -147,111 +124,31 @@ function loop(ts) {
   }
 
   // ── NOTES EN DIRECT (Enregistrement / Jeu temps réel) ──
-
-for (let i = liveNotes.length - 1; i >= 0; i--) {
-
+  for (let i = liveNotes.length - 1; i >= 0; i--) {
     const note = liveNotes[i];
     const now = getLiveTime();
 
     if (!note.released) {
-
-        const height = Math.max(
-            4,
-            (now - note.startTime) * PIXELS_PER_SECOND
-        );
-
-        note.el.style.height = height + "px";
-        note.el.style.top = (fallH - height) + "px";
-
+      // Touche maintenue : la note s'étire vers le haut
+      const height = Math.max(4, (now - note.startTime) * PIXELS_PER_SECOND);
+      note.el.style.height = height + "px";
+      note.el.style.top = (fallH - height) + "px";
     } else {
+      // Touche relâchée : la note monte et disparaît
+      const elapsed = now - note.releaseTime;
+      const top = (fallH - note.releaseHeight) - (elapsed * PIXELS_PER_SECOND);
+      note.el.style.height = note.releaseHeight + "px";
+      note.el.style.top = top + "px";
 
-        const elapsed = now - note.releaseTime;
-
-        const top =
-            (fallH - note.releaseHeight)
-            - (elapsed * PIXELS_PER_SECOND);
-
-        note.el.style.height =
-            note.releaseHeight + "px";
-
-        note.el.style.top =
-            top + "px";
-
-        if (top + note.releaseHeight < 0) {
-
-            note.el.remove();
-            liveNotes.splice(i, 1);
-
-        }
-
+      if (top + note.releaseHeight < 0) {
+        note.el.remove();
+        liveNotes.splice(i, 1);
+      }
     }
+  }
+}  // ← fin de loop()
 
-}
-
-function spawnLiveNote(midi, source) {
-
-    const layout = noteLayout.find(n => n.midi === midi);
-    if (!layout) return;
-
-    const fallH = fallZone.offsetHeight;
-    const hand = midi < 60 ? "left" : "right";
-
-    const el = document.createElement("div");
-
-    el.className = "note-block " + hand + " live-note";
-    el.style.left = (layout.x + 2) + "px";
-    el.style.width = (layout.w - 4) + "px";
-    el.style.height = "4px";
-    el.style.top = (fallH - 4) + "px";
-
-    el.textContent = NOTE_NAMES[layout.n];
-
-    fallZone.appendChild(el);
-
-    liveNotes.push({
-
-        id: nextLiveNoteId++,
-
-        midi: midi,
-
-        el: el,
-
-        startTime: getLiveTime(),
-
-        released: false,
-
-        releaseTime: null,
-
-        releaseHeight: 4
-
-    });
-
-}
-
-function releaseLiveNote(midi) {
-
-    for (let i = 0; i < liveNotes.length; i++) {
-
-        const note = liveNotes[i];
-
-        if (note.midi !== midi) continue;
-
-        if (note.released) continue;
-
-        note.released = true;
-
-        note.releaseTime = getLiveTime();
-
-        note.releaseHeight =
-            parseFloat(note.el.style.height) || 4;
-
-        break;
-
-    }
-
-}
-
-console.log("avant startSong");
+// ===== Contrôle de la lecture =====
 function startSong() {
   if (scheduledEvents.length === 0) {
     runDemo();
@@ -262,21 +159,18 @@ function startSong() {
   songStartTime = performance.now() + fallDelay * 1000;
 }
 
-console.log("après startSong", typeof startSong);
-console.log("startSong déclarée");
-console.log("startSong déclarée", typeof startSong);
-
 function stopSong() {
   playing = false;
   scheduledEvents = [];
   songStartTime = null;
   noteBlocks.forEach(b => b.el.remove());
   noteBlocks = [];
+  liveNotes.forEach(n => n.el.remove());
+  liveNotes = [];
   for (const midi in liveNoteBlocks) {
     liveNoteBlocks[midi].el.remove();
-}
-
-liveNoteBlocks = {};
+  }
+  liveNoteBlocks = {};
   activeKeys.clear();
   activeTouches = {};
   drawPiano();
@@ -287,16 +181,7 @@ function setStatus(msg) {
   document.getElementById('status').textContent = msg;
 }
 
-function playbackRecording() {
-  if (!recordedSong) return;
-  stopSong();
-  scheduledEvents = [...recordedSong];
-  const fallDelay = fallZone.offsetHeight / (FALL_SPEED * speedFactor);
-  songStartTime = performance.now() + fallDelay * 1000;
-  scheduledEvents = scheduledEvents.map(ev => ({ ...ev, time: ev.time + fallDelay / speedFactor }));
-  playing = true;
-  setStatus('▶ Relecture de ton enregistrement');
-}
+// Note : spawnLiveNote, releaseLiveNote et playbackRecording sont définies dans index.html
 
 function runDemo() {
   stopSong();
@@ -386,5 +271,4 @@ function parseMidi(data) {
     pos = end;
   }
   return allNotes.sort((a, b) => a.time - b.time);
-}
 }
