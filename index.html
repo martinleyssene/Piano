@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Piano Synthesia</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -26,6 +26,10 @@
     align-items: center;
     gap: 8px;
     padding: 8px 14px;
+    /* plein écran sur téléphone : on laisse la place sous l'encoche / la barre d'état */
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
     background: #13131a;
     border-bottom: 1px solid #222;
     flex-shrink: 0;
@@ -56,6 +60,7 @@
     -webkit-tap-highlight-color: transparent;
   }
   .btn:hover { background: #2a2a3e; color: #fff; }
+  select.btn { max-width: 170px; padding: 4px 6px; }
   .btn.active { background: #3a3a5e; border-color: #6666cc; color: #fff; }
   .btn.rec { border-color: #cc3333; }
   .btn.rec.active { background: #3e1e1e; border-color: #ff4444; color: #ff8888; }
@@ -209,6 +214,7 @@
 
   #piano-wrapper {
     flex-shrink: 0;
+    padding-bottom: env(safe-area-inset-bottom);
     background: #111;
     border-top: 2px solid #222;
     overflow: hidden;
@@ -432,8 +438,7 @@
   <div class="sep"></div>
 
   <div id="midi-device">🎹 Non connecté</div>
-  <button class="btn" id="btn-connect-midi">Connecter Roland</button>
-  <button class="btn" id="btn-connect-ble" title="Connexion Bluetooth directe (Chrome ou Edge sur PC)">🔵 Bluetooth</button>
+  <button class="btn" id="btn-connect-midi">🎹 Connecter le piano</button>
 
   <div class="sep"></div>
 
@@ -454,6 +459,7 @@
 
   <button class="btn" id="btn-score">🎯 Score</button>
   <button class="btn" id="btn-mute">🔇 Son OFF</button>
+  <select class="btn" id="instrument-select" title="Instrument — Sons : Salamander Grand Piano (Alexander Holm, CC BY 3.0) et FluidR3_GM (CC BY 3.0, via midi-js-soundfonts)"></select>
 
   <div class="sep"></div>
 
@@ -715,6 +721,7 @@ window.addEventListener('load', () => {
   window.addEventListener('resize', resizeAll);
 
   initKeyboardControls();
+  initInstrumentSelect();
 
   // Déverrouillage du son : un toucher / clic n'importe où sur la page (y compris
   // au-dessus du clavier) suffit à activer l'audio du navigateur.
@@ -728,8 +735,7 @@ window.addEventListener('load', () => {
   UNLOCK_EVENTS.forEach(ev => document.addEventListener(ev, unlockAudio, true));
 
   // Boutons
-  document.getElementById('btn-connect-midi').addEventListener('click', connectMidi);
-  document.getElementById('btn-connect-ble').addEventListener('click', connectBle);
+  document.getElementById('btn-connect-midi').addEventListener('click', connectPiano);
   document.getElementById('btn-play').addEventListener('click', startSong);
   document.getElementById('btn-stop').addEventListener('click', stopSong);
   document.getElementById('btn-demo').addEventListener('click', runDemo);
@@ -823,6 +829,7 @@ function scanMidiInputs() {
   try {
     const inputs = Array.from(midiAccess.inputs.values());
     if (inputs.length === 0) {
+      if (bleCharacteristic) return; // piano déjà connecté en Bluetooth direct
       devEl.textContent = '🎹 Aucun clavier';
       devEl.className = '';
       setStatus('Aucun clavier détecté');
@@ -855,18 +862,54 @@ let bleDevice = null;
 let bleCharacteristic = null;
 const bleHeldNotes = new Set();
 
-async function connectBle() {
+// Bouton unique "Connecter le piano" :
+//  Sur PC (Chrome / Edge) : Bluetooth direct d'abord, puis MIDI du navigateur en secours.
+//  Sur téléphone (MIDIWeb, Android) : MIDI du navigateur.
+async function connectPiano(e) {
+  // 1) Bluetooth direct (PC avec Chrome / Edge). La fenêtre de choix de l'appareil doit
+  //    s'ouvrir tout de suite après le clic, avant tout autre traitement (règle du navigateur).
+  let bleResult = 'unsupported';
+  if (navigator.bluetooth) {
+    bleResult = await connectBle(!!(e && e.shiftKey)); // Maj + clic : affiche tous les appareils Bluetooth (diagnostic)
+    if (bleResult === 'ok' || bleResult === 'cancelled') return;
+  }
+  const bleMessage = document.getElementById('status').textContent;
+
+  // 2) MIDI du navigateur (iPhone avec MIDIWeb, Android, piano branché en USB, etc.)
+  let midiFound = false;
+  if (navigator.requestMIDIAccess) {
+    try {
+      midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+      midiAccess.onstatechange = scanMidiInputs;
+      scanMidiInputs();
+      midiFound = midiAccess.inputs.size > 0;
+    } catch (err) {
+      setStatus('❌ Accès MIDI refusé : ' + err.message);
+      return;
+    }
+  }
+  if (midiFound) return;
+
+  if (bleResult === 'error') {
+    setStatus(bleMessage); // on garde l'erreur Bluetooth, plus utile
+  } else if (navigator.requestMIDIAccess) {
+    setStatus('Aucun piano détecté : vérifie qu\'il est allumé et connecté dans MIDIWeb, puis réessaie');
+  } else {
+    setStatus('❌ Navigateur non compatible : sur iPhone utilise MIDIWeb, sur PC utilise Chrome ou Edge');
+  }
+}
+
+async function connectBle(showAll) {
   if (!navigator.bluetooth) {
     setStatus('❌ Bluetooth direct non supporté ici (utilise Chrome ou Edge sur PC)');
-    return;
+    return 'unsupported';
   }
   try {
     if (!bleDevice) {
       setStatus('🔵 Recherche du piano…');
-      bleDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [BLE_MIDI_SERVICE] }, { namePrefix: 'GO:PIANO' }],
-        optionalServices: [BLE_MIDI_SERVICE]
-      });
+      bleDevice = await navigator.bluetooth.requestDevice(showAll
+        ? { acceptAllDevices: true, optionalServices: [BLE_MIDI_SERVICE] }
+        : { filters: [{ services: [BLE_MIDI_SERVICE] }, { namePrefix: 'GO:PIANO' }], optionalServices: [BLE_MIDI_SERVICE] });
       bleDevice.addEventListener('gattserverdisconnected', onBleDisconnected);
     }
     setStatus('🔵 Connexion…');
@@ -880,13 +923,15 @@ async function connectBle() {
     devEl.textContent = '🔵 ' + (bleDevice.name || 'Piano Bluetooth');
     devEl.className = 'connected';
     setStatus('✅ ' + (bleDevice.name || 'Piano') + ' connecté en Bluetooth');
+    return 'ok';
   } catch (err) {
     bleDevice = null; // au prochain clic, on rouvre la liste des appareils
     if (err && err.name === 'NotFoundError') {
-      setStatus('Connexion Bluetooth annulée');
-    } else {
-      setStatus('❌ Bluetooth : ' + (err && err.message ? err.message : err));
+      setStatus('Aucun piano choisi ou trouvé : coupe le Bluetooth du téléphone (ferme MIDIWeb), éteins puis rallume le piano, et réessaie');
+      return 'cancelled';
     }
+    setStatus('❌ Bluetooth : ' + (err && err.message ? err.message : err));
+    return 'error';
   }
 }
 
@@ -898,7 +943,7 @@ function onBleDisconnected() {
   const devEl = document.getElementById('midi-device');
   devEl.textContent = '🎹 Bluetooth déconnecté';
   devEl.className = '';
-  setStatus('🔵 Bluetooth déconnecté — clique sur Bluetooth pour te reconnecter');
+  setStatus('🔵 Bluetooth déconnecté — clique sur Connecter le piano pour te reconnecter');
 }
 
 // Décodage d'un paquet Bluetooth MIDI : 1 octet d'en-tête, puis pour chaque message
