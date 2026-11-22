@@ -75,7 +75,7 @@ function loop(ts) {
       debugFrameCount = 0;
       debugLastTime = now;
     }
-    const activeNotesCount = noteBlocks.length + Object.keys(liveNoteBlocks).length;
+    const activeNotesCount = noteBlocks.length + liveNotes.length;
     document.getElementById('debug-fps-val').textContent = debugFPS.toString();
     document.getElementById('debug-time-val').textContent = songTime.toFixed(2);
     document.getElementById('debug-speed-val').textContent = Math.round(PIXELS_PER_SECOND).toString();
@@ -176,10 +176,6 @@ function stopSong() {
   noteBlocks = [];
   liveNotes.forEach(n => n.el.remove());
   liveNotes = [];
-  for (const midi in liveNoteBlocks) {
-    liveNoteBlocks[midi].el.remove();
-  }
-  liveNoteBlocks = {};
   for (const m of Array.from(activeVoices.keys())) stopNote(m); // coupe tous les sons en cours
   activeKeys.clear();
   activeTouches = {};

@@ -497,7 +497,7 @@ function findNearestSample(samples, midi) {
   return best;
 }
 
-// Remplace la version de index.html : joue l'instrument choisi si possible
+// Joue la note avec l'instrument choisi (repli : le son synthétique playNoteOscillator, défini dans index.html)
 function playNote(midi, velocity = 80) {
   ensureAudioContext();
   if (!audioContext || audioContext.state !== 'running') return;

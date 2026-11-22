@@ -605,9 +605,7 @@ let pianoCanvas, pianoCtx, gridCanvas, gridCtx, fallZone;
 let whiteW, blackW, blackH;
 let totalWhites, noteLayout = [];
 let activeKeys     = new Set();
-let liveNoteBlocks = {}; // midi → { el, startTime }
 let noteBlocks     = [];
-let lastTime       = null;
 let playing        = false;
 let scheduledEvents = [];
 let songStartTime   = null;
@@ -844,21 +842,6 @@ window.addEventListener('load', () => {
 });
 
 // ── MIDI ──
-async function connectMidi() {
-  if (!navigator.requestMIDIAccess) {
-    setStatus('❌ Web MIDI non supporté');
-    return;
-  }
-  try {
-    midiAccess = await navigator.requestMIDIAccess({ sysex: false });
-    scanMidiInputs();
-    midiAccess.onstatechange = scanMidiInputs;
-    setStatus('✅ MIDI initialisé');
-  } catch(err) {
-    setStatus('❌ Accès MIDI refusé : ' + err.message);
-  }
-}
-
 function scanMidiInputs() {
   const devEl = document.getElementById('midi-device');
   rolandInput = null;
@@ -1403,7 +1386,6 @@ let editorSelected   = new Set();
 let editorDragging   = null;  // {noteIdx, startX, startY, origTime}
 let editorCanvas, editorCtx, editorPianoCanvas, editorPianoCtx;
 let editorZone;
-let colorPickerTarget = null; // 'selected' ou index
 
 function openEditor(rec) {
   editorRec      = rec;
