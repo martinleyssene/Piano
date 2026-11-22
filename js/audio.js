@@ -314,6 +314,109 @@ function initInstrumentSelect() {
   });
 }
 
+// ---------- Réverbération ----------
+// Une réverb synthétique (ConvolverNode) est branchée sur la sortie générale (masterGain, voir
+// ensureAudioContext() dans index.html) : tous les instruments et le son de secours en profitent.
+// Le curseur « Réverb » de la barre d'outils règle la quantité (0 = aucune réverb).
+// Le réglage est mémorisé sur l'appareil (localStorage, clé piano_reverb_v3 ; le basculement 100 % / réglage de base n'est pas mémorisé).
+
+const REVERB_DEFAULT = 0.2;   // réglage de base : 20 % (= le son de l'ancien « 10 % »)
+const REVERB_WET_MAX = 1.8;   // gain de la réverb à 100 % (2 fois l'ancien maximum, qui était de 0,9)
+const REVERB_CURVE = 1.86;    // curseur non linéaire : 20 % -> gain 0,09 (ancien 10 %), 100 % -> gain 1,8
+const REVERB_SECONDS = 2.2;
+let reverbAmount = REVERB_DEFAULT;
+try {
+  const savedReverb = parseFloat(localStorage.getItem('piano_reverb_v3'));
+  if (!isNaN(savedReverb)) reverbAmount = Math.max(0, Math.min(1, savedReverb));
+} catch (e) {}
+let reverbDryGain = null;
+let reverbWetGain = null;
+
+// Réponse impulsionnelle synthétique : bruit stéréo qui s'éteint progressivement
+function makeReverbImpulse(seconds) {
+  const rate = audioContext.sampleRate;
+  const length = Math.floor(rate * seconds);
+  const impulse = audioContext.createBuffer(2, length, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 3);
+    }
+  }
+  return impulse;
+}
+
+// Branche la réverb entre `input` (masterGain) et `output` (compresseur). Appelée une seule fois,
+// par ensureAudioContext(), quand l'AudioContext est créé.
+function setupReverb(input, output) {
+  reverbDryGain = audioContext.createGain();
+  reverbWetGain = audioContext.createGain();
+  const convolver = audioContext.createConvolver();
+  convolver.buffer = makeReverbImpulse(REVERB_SECONDS);
+  input.connect(reverbDryGain);
+  reverbDryGain.connect(output);
+  input.connect(convolver);
+  convolver.connect(reverbWetGain);
+  reverbWetGain.connect(output);
+  applyReverbAmount();
+}
+
+// Règle le mélange son direct / son avec réverb (changement progressif pour éviter les claquements)
+function applyReverbAmount() {
+  if (!audioContext || !reverbDryGain || !reverbWetGain) return;
+  const now = audioContext.currentTime;
+  reverbDryGain.gain.setTargetAtTime(1 - reverbAmount * 0.3, now, 0.03);
+  reverbWetGain.gain.setTargetAtTime(REVERB_WET_MAX * Math.pow(reverbAmount, REVERB_CURVE), now, 0.03);
+}
+
+function setReverbAmount(value, save = true) {
+  reverbAmount = Math.max(0, Math.min(1, value));
+  if (save) {
+    try { localStorage.setItem('piano_reverb_v3', String(reverbAmount)); } catch (e) {}
+  }
+  applyReverbAmount();
+}
+
+// Relie le curseur de la barre d'outils au réglage de réverb
+function initReverbControl() {
+  const slider = document.getElementById('reverb');
+  const label = document.getElementById('reverb-val');
+  if (!slider) return;
+  slider.value = reverbAmount;
+  if (label) label.textContent = Math.round(reverbAmount * 100) + '%';
+  slider.addEventListener('input', () => {
+    setReverbAmount(parseFloat(slider.value));
+    if (label) label.textContent = Math.round(reverbAmount * 100) + '%';
+  });
+}
+
+// Touche Espace (voir keyboard.js) et bouton « Réverb » au-dessus du clavier : un appui passe la réverb à 100 %, un nouvel appui la
+// ramène au réglage de base (20 %). Ce changement n'est pas mémorisé (au démarrage, on retrouve le réglage
+// du curseur). Le bouton suit aussi le curseur : il est allumé quand la réverb est à 100 %.
+function updateReverbButton() {
+  const btn = document.getElementById('btn-reverb-toggle');
+  if (!btn) return;
+  btn.textContent = '✨ Réverb ' + Math.round(reverbAmount * 100) + '% (Espace)';
+  btn.classList.toggle('active', reverbAmount >= 0.99);
+}
+
+function toggleReverbBoost() {
+  setReverbAmount(reverbAmount >= 0.99 ? REVERB_DEFAULT : 1, false);
+  const slider = document.getElementById('reverb');
+  const label = document.getElementById('reverb-val');
+  if (slider) slider.value = reverbAmount;
+  if (label) label.textContent = Math.round(reverbAmount * 100) + '%';
+  updateReverbButton();
+}
+
+function initReverbButton() {
+  const btn = document.getElementById('btn-reverb-toggle');
+  const slider = document.getElementById('reverb');
+  if (btn) btn.addEventListener('click', toggleReverbBoost);
+  if (slider) slider.addEventListener('input', updateReverbButton);
+  updateReverbButton();
+}
+
 // ---------- Jouer une note ----------
 
 function findNearestSample(samples, midi) {

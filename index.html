@@ -227,6 +227,18 @@
     touch-action: none;
   }
 
+  #btn-reverb-toggle {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    z-index: 20;
+    padding: 9px 16px;
+    font-size: 13px;
+    background: #13131acc;
+    border-color: #555;
+  }
+  #btn-reverb-toggle.active { background: #3a3a5e; border-color: #8888ee; color: #fff; }
+
   #legend {
     position: absolute;
     top: 10px;
@@ -459,6 +471,7 @@
 
   <button class="btn" id="btn-score">🎯 Score</button>
   <button class="btn" id="btn-mute">🔇 Son OFF</button>
+  <button class="btn" id="btn-kblock" title="Mode jeu : désactive toutes les touches du clavier sauf celles qui jouent des notes et Espace (réverbération)">⌨ Mode jeu</button>
   <select class="btn" id="instrument-select" title="Instrument — Sons : Salamander Grand Piano (Alexander Holm, CC BY 3.0) et FluidR3_GM (CC BY 3.0, via midi-js-soundfonts)"></select>
 
   <div class="sep"></div>
@@ -466,6 +479,12 @@
   <span style="font-size:11px;color:#888">Vitesse</span>
   <input type="range" id="speed" min="0.3" max="2" step="0.05" value="1">
   <span id="speed-val" style="font-size:11px;color:#aaa">×1.0</span>
+
+  <div class="sep"></div>
+
+  <span style="font-size:11px;color:#888">Réverb</span>
+  <input type="range" id="reverb" min="0" max="1" step="0.05" value="0.2" style="width:80px;accent-color:#8888ee">
+  <span id="reverb-val" style="font-size:11px;color:#aaa">20%</span>
 
   <span id="status">Prêt</span>
 </div>
@@ -483,6 +502,7 @@
     <div id="score-streak">Série : 0</div>
     <div id="score-acc">Précision : —</div>
   </div>
+  <button class="btn" id="btn-reverb-toggle" title="Réverbération : un clic (ou la touche Espace) passe à 100 %, un second clic revient au réglage de base (20 %)">✨ Réverb 20% (Espace)</button>
   <div id="legend">
     <div class="leg"><div class="leg-dot leg-left"></div> Gauche</div>
     <div class="leg"><div class="leg-dot leg-right"></div> Droite</div>
@@ -571,8 +591,14 @@ const NOTE_NAMES   = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const SCORE_WINDOW = 0.25;
 
 const KEY_MAP = {
-  'a':48,'z':49,'e':50,'r':51,'t':52,'y':53,'u':54,'i':55,'o':56,'p':57,
-  'q':60,'s':61,'d':62,'f':63,'g':64,'h':65,'j':66,'k':67,'l':68,'m':69,
+  // Clavier d'ordinateur : 1 touche = 1 demi-ton. Les touches sont reperees par leur POSITION (clavier AZERTY),
+  // sur 4 rangees : ² = Do2 ; < w x c v b n , ; : ! = Ré#2 à Si2 ; a z e r t y u i o p ^ $ = Do3 à Si3
+  Backquote:36,
+  IntlBackslash:37, KeyZ:38, KeyX:39, KeyC:40, KeyV:41, KeyB:42, KeyN:43, KeyM:44, Comma:45, Period:46, Slash:47,
+  KeyQ:48, KeyW:49, KeyE:50, KeyR:51, KeyT:52, KeyY:53, KeyU:54, KeyI:55, KeyO:56, KeyP:57, BracketLeft:58, BracketRight:59,
+  // q s d f g h j k l m ù * = Do4 à Si4 ; & é " ' ( - è _ ç à ) = = Do5 à Si5
+  KeyA:60, KeyS:61, KeyD:62, KeyF:63, KeyG:64, KeyH:65, KeyJ:66, KeyK:67, KeyL:68, Semicolon:69, Quote:70, Backslash:71,
+  Digit1:72, Digit2:73, Digit3:74, Digit4:75, Digit5:76, Digit6:77, Digit7:78, Digit8:79, Digit9:80, Digit0:81, Minus:82, Equal:83,
 };
 
 let pianoCanvas, pianoCtx, gridCanvas, gridCtx, fallZone;
@@ -625,7 +651,11 @@ function ensureAudioContext() {
         masterGain.gain.value = 0.6;
         // Compresseur : évite la saturation quand plusieurs notes jouent ensemble
         const compressor = audioContext.createDynamicsCompressor();
-        masterGain.connect(compressor);
+        if (typeof setupReverb === "function") {
+            setupReverb(masterGain, compressor); // réverbération (voir js/audio.js)
+        } else {
+            masterGain.connect(compressor);
+        }
         compressor.connect(audioContext.destination);
         loadPianoSamples(); // téléchargement des sons de piano en arrière-plan
 
@@ -722,6 +752,8 @@ window.addEventListener('load', () => {
 
   initKeyboardControls();
   initInstrumentSelect();
+  initReverbControl();
+  initReverbButton();
 
   // Déverrouillage du son : un toucher / clic n'importe où sur la page (y compris
   // au-dessus du clavier) suffit à activer l'audio du navigateur.

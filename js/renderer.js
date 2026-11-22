@@ -1,3 +1,6 @@
+// ===== Dessin du clavier, de la grille et placement des touches =====
+// (Le dessin de l'éditeur de notes est dans index.html, avec le reste de l'éditeur.)
+
 function buildLayout() {
   noteLayout = [];
   totalWhites = 0;
@@ -45,6 +48,19 @@ function resizeAll() {
   gridCanvas.height = fz.offsetHeight;
   drawGrid();
   drawPiano();
+  repositionBlocks();
+}
+
+// Après un redimensionnement (rotation du téléphone, etc.) : replace les notes déjà affichées
+function repositionBlocks() {
+  const place = (el, midi) => {
+    const note = noteLayout.find(n => n.midi === midi);
+    if (!note || !el) return;
+    el.style.left = (note.x + 2) + 'px';
+    el.style.width = (note.w - 4) + 'px';
+  };
+  noteBlocks.forEach(b => place(b.el, b.midi));
+  liveNotes.forEach(n => place(n.el, n.midi));
 }
 
 function drawGrid() {
@@ -109,104 +125,4 @@ function drawPiano() {
     ctx.fill();
     ctx.stroke();
   }
-}
-
-function drawEditor() {
-  if (!editorCtx) return;
-  const W = editorCanvas.width;
-  const H = editorCanvas.height;
-  editorCtx.clearRect(0, 0, W, H);
-
-  for (let i = 0; i < NUM_OCTAVES * 12 + 1; i++) {
-    const y = i * EDITOR_ROW_H;
-    const midi = (START_OCTAVE + NUM_OCTAVES + 1) * 12 - i;
-    const isBlack = [1, 3, 6, 8, 10].includes(midi % 12);
-    editorCtx.fillStyle = isBlack ? '#0e0e16' : '#12121c';
-    editorCtx.fillRect(EDITOR_PIANO_W, y, W - EDITOR_PIANO_W, EDITOR_ROW_H);
-
-    editorCtx.strokeStyle = '#1a1a28';
-    editorCtx.lineWidth = 1;
-    editorCtx.beginPath();
-    editorCtx.moveTo(EDITOR_PIANO_W, y);
-    editorCtx.lineTo(W, y);
-    editorCtx.stroke();
-
-    const noteName = NOTE_NAMES[midi % 12];
-    editorCtx.fillStyle = midi % 12 === 0 ? '#ffffff55' : '#ffffff22';
-    editorCtx.font = '9px monospace';
-    editorCtx.textAlign = 'right';
-    editorCtx.fillText(noteName + (Math.floor(midi / 12) - 1), EDITOR_PIANO_W - 3, y + 13);
-  }
-
-  const maxTime = (editorCanvas.width - EDITOR_PIANO_W) / EDITOR_PX_S;
-  for (let t = 0; t <= maxTime; t++) {
-    const x = EDITOR_PIANO_W + t * EDITOR_PX_S;
-    editorCtx.strokeStyle = t % 2 === 0 ? '#ffffff18' : '#ffffff08';
-    editorCtx.lineWidth = 1;
-    editorCtx.beginPath();
-    editorCtx.moveTo(x, 0);
-    editorCtx.lineTo(x, H);
-    editorCtx.stroke();
-    if (t % 2 === 0) {
-      editorCtx.fillStyle = '#ffffff33';
-      editorCtx.font = '9px monospace';
-      editorCtx.textAlign = 'left';
-      editorCtx.fillText(t + 's', x + 2, 10);
-    }
-  }
-
-  editorNotes.forEach((note, idx) => {
-    const row = midiToRow(note.midi);
-    const x = EDITOR_PIANO_W + note.time * EDITOR_PX_S;
-    const y = row * EDITOR_ROW_H;
-    const w = Math.max(4, note.duration * EDITOR_PX_S - 2);
-    const h = EDITOR_ROW_H - 2;
-    const sel = editorSelected.has(idx);
-
-    let color;
-    if (note.color) {
-      color = note.color;
-    } else if (note.hand === 'left') {
-      color = '#e8e800';
-    } else if (note.hand === 'recorded') {
-      color = '#44ddff';
-    } else {
-      color = '#e83060';
-    }
-
-    editorCtx.fillStyle = color;
-    editorCtx.globalAlpha = sel ? 1 : 0.85;
-    editorCtx.beginPath();
-    editorCtx.roundRect(x, y + 1, w, h, 3);
-    editorCtx.fill();
-    editorCtx.globalAlpha = 1;
-
-    if (sel) {
-      editorCtx.strokeStyle = '#ffffff';
-      editorCtx.lineWidth = 2;
-      editorCtx.beginPath();
-      editorCtx.roundRect(x, y + 1, w, h, 3);
-      editorCtx.stroke();
-    }
-
-    if (w > 14) {
-      editorCtx.fillStyle = '#000000aa';
-      editorCtx.font = 'bold 9px sans-serif';
-      editorCtx.textAlign = 'left';
-      editorCtx.fillText(NOTE_NAMES[note.midi % 12], x + 3, y + 13);
-    }
-  });
-}
-
-function drawEditorPiano() {
-  const ctx = editorPianoCtx;
-  const W = editorPianoCanvas.width;
-  const H = 80;
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#13131a';
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#ffffff22';
-  ctx.font = '11px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('Clique sur les notes pour les sélectionner • Glisse pour déplacer • Sélectionne puis 🎨 pour changer la couleur', W / 2, 45);
 }
