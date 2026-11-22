@@ -705,11 +705,13 @@ gain.gain.linearRampToValueAtTime(
 
     osc.connect(gain);
     gain.connect(masterGain);
+    const reverbSend = (typeof attachReverbSend === "function") ? attachReverbSend(gain) : null;
 
     osc.start();
 
     activeVoices.set(midi, {
         oscillator: osc,
+        reverbSend: reverbSend,
         gain: gain
     });
 
@@ -719,6 +721,8 @@ function stopNote(midi) {
 
     const voice = activeVoices.get(midi);
     if (!voice) return;
+
+    if (voice.reverbSend && typeof releaseReverbVoice === "function") releaseReverbVoice(voice.reverbSend);
 
     const now = audioContext.currentTime;
 

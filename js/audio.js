@@ -315,8 +315,9 @@ function initInstrumentSelect() {
 }
 
 // ---------- Réverbération ----------
-// Une réverb synthétique (ConvolverNode) est branchée sur la sortie générale (masterGain, voir
-// ensureAudioContext() dans index.html) : tous les instruments et le son de secours en profitent.
+// Une réverb synthétique (ConvolverNode) est branchée à côté de la sortie générale (voir
+// ensureAudioContext() dans index.html). Chaque note (instruments et son de secours) lui envoie sa propre
+// part, et cette part se comporte comme une pédale (voir attachReverbSend).
 // Le curseur « Réverb » de la barre d'outils règle la quantité (0 = aucune réverb).
 // Le réglage est mémorisé sur l'appareil (localStorage, clé piano_reverb_v3 ; le basculement 100 % / réglage de base n'est pas mémorisé).
 
@@ -324,13 +325,18 @@ const REVERB_DEFAULT = 0.2;   // réglage de base : 20 % (= le son de l'ancien �
 const REVERB_WET_MAX = 1.8;   // gain de la réverb à 100 % (2 fois l'ancien maximum, qui était de 0,9)
 const REVERB_CURVE = 1.86;    // curseur non linéaire : 20 % -> gain 0,09 (ancien 10 %), 100 % -> gain 1,8
 const REVERB_SECONDS = 2.2;
+const REVERB_DAMP_TIME = 0.07;   // étouffement de la traîne quand la pédale est relâchée : ~-26 dB en 0,2 s, ~-37 dB en 0,3 s
+const REVERB_RETURN = 0.6;    // = masterGain.gain.value (index.html) : la réverb est prélevée avant masterGain
 let reverbAmount = REVERB_DEFAULT;
 try {
   const savedReverb = parseFloat(localStorage.getItem('piano_reverb_v3'));
   if (!isNaN(savedReverb)) reverbAmount = Math.max(0, Math.min(1, savedReverb));
 } catch (e) {}
-let reverbDryGain = null;
-let reverbWetGain = null;
+let reverbOutput = null;         // sortie de la réverb (le compresseur)
+let reverbImpulse = null;        // réponse impulsionnelle, créée une seule fois
+let reverbGen = null;            // "génération" de réverb active : { conv, ret, level } (voir dampReverbTail)
+let reverbInput = null;          // bus où chaque note envoie sa part de réverb
+const reverbVoices = new Set();  // notes en cours : { send, level } (voir attachReverbSend)
 
 // Réponse impulsionnelle synthétique : bruit stéréo qui s'éteint progressivement
 function makeReverbImpulse(seconds) {
@@ -349,24 +355,86 @@ function makeReverbImpulse(seconds) {
 // Branche la réverb entre `input` (masterGain) et `output` (compresseur). Appelée une seule fois,
 // par ensureAudioContext(), quand l'AudioContext est créé.
 function setupReverb(input, output) {
-  reverbDryGain = audioContext.createGain();
-  reverbWetGain = audioContext.createGain();
-  const convolver = audioContext.createConvolver();
-  convolver.buffer = makeReverbImpulse(REVERB_SECONDS);
-  input.connect(reverbDryGain);
-  reverbDryGain.connect(output);
-  input.connect(convolver);
-  convolver.connect(reverbWetGain);
-  reverbWetGain.connect(output);
-  applyReverbAmount();
+  input.connect(output);   // son direct, inchangé
+  reverbInput = audioContext.createGain();
+  reverbOutput = output;
+  reverbImpulse = makeReverbImpulse(REVERB_SECONDS);
+  reverbGen = createReverbGeneration(reverbAmount);
 }
 
-// Règle le mélange son direct / son avec réverb (changement progressif pour éviter les claquements)
-function applyReverbAmount() {
-  if (!audioContext || !reverbDryGain || !reverbWetGain) return;
+// Une "génération" = un convolver + son gain de sortie. Les notes envoient vers la génération active ;
+// `level` = réglage le plus fort envoyé dans cette génération (sert à détecter une pédale relâchée).
+function createReverbGeneration(level) {
+  const conv = audioContext.createConvolver();
+  conv.buffer = reverbImpulse;
+  const ret = audioContext.createGain();
+  ret.gain.value = REVERB_RETURN;
+  reverbInput.connect(conv);
+  conv.connect(ret);
+  ret.connect(reverbOutput);
+  return { conv, ret, level };
+}
+
+// Pédale relâchée : la traîne de réverb déjà produite (qui continuerait de résonner ~2 s) est étouffée par un
+// fondu rapide, puis supprimée. Les notes suivantes envoient vers une nouvelle génération, vide au départ :
+// l'ancienne traîne ne revient donc jamais, même si on remonte à 100 %.
+function dampReverbTail() {
+  const old = reverbGen;
+  if (!old) return;
   const now = audioContext.currentTime;
-  reverbDryGain.gain.setTargetAtTime(1 - reverbAmount * 0.3, now, 0.03);
-  reverbWetGain.gain.setTargetAtTime(REVERB_WET_MAX * Math.pow(reverbAmount, REVERB_CURVE), now, 0.03);
+  try { reverbInput.disconnect(old.conv); } catch (e) {}
+  old.ret.gain.cancelScheduledValues(now);
+  old.ret.gain.setValueAtTime(old.ret.gain.value, now);
+  old.ret.gain.setTargetAtTime(0, now, REVERB_DAMP_TIME);
+  setTimeout(() => {
+    try { old.ret.disconnect(); } catch (e) {}
+    try { old.conv.disconnect(); } catch (e) {}
+  }, 1500);
+  reverbGen = createReverbGeneration(reverbAmount);
+}
+
+// Gain d'envoi vers la réverb pour un réglage donné (0 à 1) ; courbe non linéaire
+function reverbSendGain(level) {
+  return REVERB_WET_MAX * Math.pow(level, REVERB_CURVE);
+}
+
+// Réverb PAR NOTE, comme une pédale : chaque note envoie vers la réverb une part fixée au moment où elle
+// est jouée (selon le réglage du moment). Ensuite, la part d'une note peut seulement BAISSER (quand on
+// repasse à un réglage plus faible), jamais remonter : repasser à 100 % n'augmente pas la réverb des
+// notes déjà jouées, seulement celle des nouvelles notes.
+// `sourceNode` = sortie de la note (son gain). Renvoie l'objet à donner à releaseReverbVoice().
+function attachReverbSend(sourceNode) {
+  if (!audioContext || !reverbInput) return null;
+  const send = audioContext.createGain();
+  send.gain.value = reverbSendGain(reverbAmount);
+  sourceNode.connect(send);
+  send.connect(reverbInput);
+  if (reverbGen && reverbAmount > reverbGen.level) reverbGen.level = reverbAmount;   // réglage le plus fort envoyé dans la traîne actuelle
+  const voice = { send, level: reverbAmount };
+  reverbVoices.add(voice);
+  return voice;
+}
+
+// Appelée par stopNote() (index.html) quand une note s'arrête
+function releaseReverbVoice(voice) {
+  if (!voice) return;
+  reverbVoices.delete(voice);
+  setTimeout(() => { try { voice.send.disconnect(); } catch (e) {} }, 800);
+}
+
+// Quand le réglage BAISSE, la part de réverb des notes en cours baisse aussi (pédale relâchée).
+// Quand il MONTE, les notes en cours ne changent pas : seules les nouvelles notes profitent du nouveau réglage.
+function applyReverbAmount() {
+  if (!audioContext) return;
+  const now = audioContext.currentTime;
+  // Pédale relâchée (la part de réverb chute de moitié ou plus) : on étouffe la traîne déjà produite
+  if (reverbGen && reverbSendGain(reverbAmount) < 0.5 * reverbSendGain(reverbGen.level)) dampReverbTail();
+  reverbVoices.forEach(v => {
+    if (reverbAmount < v.level) {
+      v.level = reverbAmount;
+      v.send.gain.setTargetAtTime(reverbSendGain(v.level), now, 0.03);
+    }
+  });
 }
 
 function setReverbAmount(value, save = true) {
@@ -475,6 +543,7 @@ function playNote(midi, velocity = 80) {
   // Même structure que les voix synthétiques : stopNote() fonctionne pour tout
   activeVoices.set(midi, {
     oscillator: { stop: t => sources.forEach(s => { try { s.stop(t); } catch (e) {} }) },
-    gain: noteGain
+    gain: noteGain,
+    reverbSend: attachReverbSend(noteGain)   // réverb propre à cette note (voir « Réverbération »)
   });
 }
